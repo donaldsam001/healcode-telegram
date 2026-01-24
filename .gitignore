@@ -1,0 +1,71 @@
+# ===============================
+# Python
+# ===============================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# ===============================
+# Environment / Secrets
+# ===============================
+.env
+.env.*
+*.env
+
+# ===============================
+# Logs & Runtime Files
+# ===============================
+*.log
+logs/
+*.pid
+
+# ===============================
+# OS / Editor
+# ===============================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# ===============================
+# Test / Coverage
+# ===============================
+.coverage
+htmlcov/
+.pytest_cache/
+
+# ===============================
+# Build / Distribution
+# ===============================
+build/
+dist/
+*.egg-info/
+
+# ===============================
+# Git Automation (IMPORTANT)
+# ===============================
+# Cloned repositories
+repos/
+repo/
+tmp/
+workdir/
+
+# Prevent accidental commits of credentials
+*.pem
+*.key
+*.crt
+id_rsa*
+id_ed25519*
+
+# ===============================
+# Docker (if later used)
+# ===============================
+docker-data/
