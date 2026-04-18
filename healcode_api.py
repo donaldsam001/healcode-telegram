@@ -7,7 +7,7 @@ from telegram.ext import ContextTypes
 
 
 USE_MOCK = True
-API_BASE_URL = "http://localhost:8080"
+API_BASE_URL = "http://localhost:8000/"
 
 def call_start_api(id: str, name: str, token: str):
 
@@ -94,11 +94,10 @@ def call_healcode_api(code: str):
     #     )
     #     return response.json()
     if code == "start":
+        # Truyền đúng dictionary thay vì chỉ gọi biến id
         response = requests.post(
             f"{API_BASE_URL}/start",
-            json={
-                id
-            },
+            json={"id": "dummy_id", "name": "dummy_name", "token": "dummy"},
             timeout=10
         )
         return response.json()
