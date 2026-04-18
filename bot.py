@@ -10,15 +10,10 @@ load_dotenv('.env.local')
 
 # done
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    id = update.effective_user.id
     username = update.effective_user.username
     print("Username:", username)
-    if not context.args:
-        await update.message.reply_text("Nhập token github")
-        return
-    token = context.args[0]
-    print("token:", token)
-    result = call_start_api(str(id), username, token)
+
+    result = call_start_api( username)
     print("API Result:", result)
 
     menu_text = (

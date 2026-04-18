@@ -7,20 +7,96 @@ from telegram.ext import ContextTypes
 
 
 USE_MOCK = True
-API_BASE_URL = "http://localhost:8000/"
+API_BASE_URL = "https://bw7ckw36-8080.asse.devtunnels.ms/"
 
-def call_start_api(id: str, name: str, token: str):
+
+'''
+    /api/credential
+'''
+def call_start_api(name: str):
 
         response = requests.post(
-            f"{API_BASE_URL}/start",
+            f"{API_BASE_URL}/api/credential",
             json={
-                "id": id,
-                "name": name,
-                "token": token
+                "provider_id": "telegram",
+                "username": name,
             },
             timeout=10
         )
         return response.json()
+
+
+'''
+    /api/credential/token
+'''
+def call_credential_token(token: str):
+
+        response = requests.post(
+            f"{API_BASE_URL}/api/credential/token",
+            json={
+                "token": token,
+            },
+            timeout=10
+        )
+        return response.json()
+
+'''
+    /api/credential/me
+'''
+def call_credential_me():
+
+        response = requests.get(
+            f"{API_BASE_URL}/api/credential/me",
+            json={
+            },
+            timeout=10
+        )
+        return response.json()
+
+
+
+'''
+    /api/git/repo   List repo
+'''
+def get_list_repo():
+
+        response = requests.get(
+            f"{API_BASE_URL}/api/git/repo",
+            json={
+            },
+            timeout=10
+        )
+        return response.json()
+
+'''
+    /api/git/repo   update current repo
+'''
+def update_current_repo(git_url: str  ):
+
+        response = requests.put(
+            f"{API_BASE_URL}/api/git/repo",
+            json={
+                 "git_url": git_url
+            },
+            timeout=10
+        )
+        return response.json()
+
+'''
+    /api/git/repo   clone repo
+'''
+def clone_repo(url: str, branch: str ):
+
+        response = requests.post(
+            f"{API_BASE_URL}/api/git/repo",
+            json={
+                 "url": url,
+                    "branch": branch
+            },
+            timeout=10
+        )
+        return response.json()
+
 
 def call_repo_api(url: str, branch: str):
 
@@ -66,13 +142,13 @@ def call_fix_api(repo_name: str, issue: str):
     except Exception as e:
         return {"error": str(e)}
 
-def call_cancel_api(repo_name: str, request_id: str):
+def call_cancel_api( request_id: str):
     """
-    Backend: DELETE /api/fix/{repo}/cancel/{request_id}
+    Backend: DELETE /api/fix/cancel/{request_id}
     """
     try:
         response = requests.delete(
-            f"{API_BASE_URL}/api/fix/{repo_name}/cancel/{request_id}",
+            f"{API_BASE_URL}/cancel/{request_id}",
             timeout=10
         )
         return response.json()
@@ -150,6 +226,13 @@ def call_healcode_api(code: str):
         )
         return response.json()
     
+    elif code == "cancel":
+        response = requests.get(
+            f"{API_BASE_URL}/cancel/{request_id}",
+            json={},
+            timeout=10
+        )
+        return response.json()
 
     
 # res=call_healcode_api("health")
