@@ -39,7 +39,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(menu_text)
 
-async def list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def list_repo(Update: Update, context: ContextTypes.DEFAULT_TYPE):
     pass
 
 async def repo(update: Update, context: ContextTypes.DEFAULT_TYPE):
