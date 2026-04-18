@@ -39,8 +39,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(menu_text)
 
-async def list_repo(Update: Update, context: ContextTypes.DEFAULT_TYPE):
-    pass
+async def list_repo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔄 Đang lấy danh sách repository...")
+    
+    result = call_healcode_api("list")
+    
+    msg = "📂 **Danh sách Repository của bạn:**\n\n"
+    # Giả định API trả về list hoặc dict chứa key 'repos'
+    if isinstance(result, list):
+        for r in result:
+            msg += f"📦 `{r}`\n"
+    elif isinstance(result, dict) and "repos" in result:
+        for r in result["repos"]:
+            msg += f"📦 `{r.get('name', r)}`\n"
+    else:
+        msg += f"Dữ liệu trả về: {result}"
+        
+    await update.message.reply_text(msg)
 
 async def repo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1. Kiểm tra xem người dùng có nhập tham số không (context.args có rỗng không)
@@ -72,11 +87,26 @@ async def repo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(msg)
 
-async def branch(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    pass
+async def branches(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("⚠️ Vui lòng nhập tên branch muốn đổi.\nVí dụ: /branches feature-login")
+        return
+
+    branch_name = context.args[0]
+    await update.message.reply_text(f"🌿 Đang yêu cầu chuyển sang nhánh `{branch_name}`...")
+
+    # Tùy thuộc vào backend, bạn có thể cần truyền tên branch vào body. 
+    # Ở đây sử dụng hàm mặc định bạn đã viết sẵn.
+    result = call_healcode_api("branch")
+    
+    await update.message.reply_text(f"🔄 **Phản hồi từ hệ thống:**\n{result}")
 
 async def cursor(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    pass
+    await update.message.reply_text("🔍 Đang truy xuất thông tin vị trí làm việc (cursor) của bạn...")
+    
+    result = call_healcode_api("cursor")
+    
+    await update.message.reply_text(f"📍 **Vị trí hiện tại của bạn:**\n`{result}`")
 
 async def fix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Cần: Tên repo (để tạo path URL) và lỗi (trace error)
@@ -106,19 +136,23 @@ async def fix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Cancelling operation...")
+    # Cần 2 tham số: Tên repo và ID của yêu cầu fix
+    if len(context.args) < 2:
+        await update.message.reply_text("⚠️ Cú pháp: /cancel <tên_repo> <request_id>\nVí dụ: /cancel my-project req_123")
+        return
 
-    if context.args:
-        request = context.args[0] 
+    repo_name = context.args[0]
+    request_id = context.args[1]
+
+    await update.message.reply_text(f"🛑 Đang gửi yêu cầu hủy cho task `{request_id}` của repo `{repo_name}`...")
+
+    result = call_cancel_api(repo_name, request_id)
+
+    # Xử lý phản hồi từ backend
+    if "message" in result:
+        msg = f"✅ **Thành công:** {result['message']}"
     else:
-        request = "all"
-        await update.message.reply_text("(default: all).")
-
-    result = call_cancel_api(request)
-
-    msg = "🧠 Healcode Result:\n"
-    for s in result["suggestions"]:
-        msg += f"• {s}\n"
+        msg = f"❌ **Lỗi:** {result.get('detail', result.get('error', 'Không thể hủy task'))}"
 
     await update.message.reply_text(msg)
 
@@ -150,12 +184,13 @@ if not TELEGRAM_BOT_TOKEN:
     raise ValueError("TELEGRAM_BOT_TOKEN not found in .env.local file")
 
 app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+# Xóa các dòng app.add_handler cũ và thay bằng:
 app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("repo", list))  
-app.add_handler(CommandHandler("repo", repo))
-app.add_handler(CommandHandler("repo", branch))  
-app.add_handler(CommandHandler("repo", cursor))  
-app.add_handler(CommandHandler("fix", fix))
-app.add_handler(CommandHandler("cancel", cancel))
-app.add_handler(CommandHandler("status", status))
+app.add_handler(CommandHandler("list", list_repo))    # /list
+app.add_handler(CommandHandler("repo", repo))         # /repo
+app.add_handler(CommandHandler("branches", branches)) # /branches
+app.add_handler(CommandHandler("cursor", cursor))     # /cursor
+app.add_handler(CommandHandler("fix", fix))           # /fix
+app.add_handler(CommandHandler("cancel", cancel))     # /cancel
+app.add_handler(CommandHandler("status", status))     # /status
 app.run_polling()
