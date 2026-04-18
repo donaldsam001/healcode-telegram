@@ -1,239 +1,230 @@
-import json
 import requests
-import httpx
 import logging
-from telegram import Update
-from telegram.ext import ContextTypes
 
+# Cấu hình log cơ bản nếu cần
+logger = logging.getLogger(__name__)
 
-USE_MOCK = True
-API_BASE_URL = "https://bw7ckw36-8080.asse.devtunnels.ms/"
+USE_MOCK = False
+API_BASE_URL = "https://bw7ckw36-8080.asse.devtunnels.ms" # Loại bỏ dấu / ở cuối để dễ nối chuỗi
 
+def _get_headers(token: str = None) -> dict:
+    """Hàm hỗ trợ tạo headers, tự động thêm Bearer token nếu có."""
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
-'''
-    /api/credential
-'''
-def call_start_api(name: str):
+# ==========================================
+# HEALTH & ROOT
+# ==========================================
 
+def call_health_api():
+    """GET /health - Kiểm tra trạng thái server"""
+    try:
+        response = requests.get(f"{API_BASE_URL}/health", timeout=10)
+        return response.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+# ==========================================
+# CREDENTIAL
+# ==========================================
+
+def call_credential_create(username: str, provider_id: str = "telegram"):
+    """POST /api/credential - Tạo hoặc lấy thông tin credential"""
+    try:
         response = requests.post(
             f"{API_BASE_URL}/api/credential",
-            json={
-                "provider_id": "telegram",
-                "username": name,
-            },
+            json={"provider_id": provider_id, "username": username},
             timeout=10
         )
         return response.json()
+    except Exception as e:
+        return {"error": str(e)}
 
-
-'''
-    /api/credential/token
-'''
-def call_credential_token(token: str):
-
+def call_credential_token(token: str, auth_token: str):
+    """POST /api/credential/token - Gửi token (yêu cầu Auth)"""
+    try:
         response = requests.post(
             f"{API_BASE_URL}/api/credential/token",
-            json={
-                "token": token,
-            },
+            headers=_get_headers(auth_token),
+            json={"token": token},
             timeout=10
         )
         return response.json()
+    except Exception as e:
+        return {"error": str(e)}
 
-'''
-    /api/credential/me
-'''
-def call_credential_me():
-
+def call_credential_me(auth_token: str):
+    """GET /api/credential/me - Lấy thông tin profile hiện tại"""
+    try:
         response = requests.get(
             f"{API_BASE_URL}/api/credential/me",
-            json={
-            },
+            headers=_get_headers(auth_token),
             timeout=10
         )
         return response.json()
+    except Exception as e:
+        return {"error": str(e)}
 
+# ==========================================
+# GIT REPO & BRANCH
+# ==========================================
 
-
-'''
-    /api/git/repo   List repo
-'''
-def get_list_repo():
-
+def get_list_repo(auth_token: str):
+    """GET /api/git/repo - Lấy danh sách Repo"""
+    try:
         response = requests.get(
             f"{API_BASE_URL}/api/git/repo",
-            json={
-            },
+            headers=_get_headers(auth_token),
             timeout=10
         )
         return response.json()
+    except Exception as e:
+        return {"error": str(e)}
 
-'''
-    /api/git/repo   update current repo
-'''
-def update_current_repo(git_url: str  ):
-
+def update_current_repo(git_url: str, auth_token: str):
+    """PUT /api/git/repo - Cập nhật repo hiện tại đang làm việc"""
+    try:
         response = requests.put(
             f"{API_BASE_URL}/api/git/repo",
-            json={
-                 "git_url": git_url
-            },
+            headers=_get_headers(auth_token),
+            json={"git_url": git_url},
             timeout=10
         )
         return response.json()
+    except Exception as e:
+        return {"error": str(e)}
 
-'''
-    /api/git/repo   clone repo
-'''
-def clone_repo(url: str, branch: str ):
-
+def add_repo(url: str, branch: str = "main", auth_token: str = None):
+    """POST /api/git/repo - Thêm/Clone một repo mới"""
+    try:
         response = requests.post(
             f"{API_BASE_URL}/api/git/repo",
-            json={
-                 "url": url,
-                    "branch": branch
-            },
-            timeout=10
-        )
-        return response.json()
-
-
-def call_repo_api(url: str, branch: str):
-
-        response = requests.post(
-            f"{API_BASE_URL}/repo",
-            json={
-                 "uuid": "421d15da-47da-4133-9e03-16e3d44fd93d",
-                "url": url,
-                "branch": branch
-            },
-            timeout=10
-        )
-        return response.json()
-
-def call_status_api(url: str, token: str):
-# get full information of alll repo status
-        try:
-            response = requests.get(
-                f"{API_BASE_URL}/status",
-                timeout=10
-            )
-            return response.json()
-        except Exception as e:
-            return {"error": str(e)}
-
-def call_fix_api(repo_name: str, issue: str):
-    """
-    Backend: POST /api/fix/{repo}
-    Body: FixRequestModel(repo_name, trace_error, priority...)
-    """
-    try:
-        response = requests.post(
-            f"{API_BASE_URL}/api/fix/{repo_name}",
-            json={
-                "repo_name": repo_name,
-                "trace_error": issue,
-                "priority": 1, # Default priority
-                "metadata": {}
-            },
+            headers=_get_headers(auth_token),
+            json={"url": url, "branch": branch},
             timeout=10
         )
         return response.json()
     except Exception as e:
         return {"error": str(e)}
 
-def call_cancel_api( request_id: str):
+def switch_branch(branch: str, auth_token: str):
+    """PUT /api/git/branche - Chuyển đổi Git Branch (Lưu ý: API ghi là 'branche')"""
+    print(123)
+    try:
+        response = requests.put(
+            f"{API_BASE_URL}/api/git/branche",
+            headers=_get_headers(auth_token),
+            json={"branch": branch},
+            timeout=10
+        )
+        print(123456)
+        return response.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+def get_git_status(auth_token: str):
+    """GET /api/git/status - Xem trạng thái/Vị trí hiện tại của Git"""
+    try:
+        response = requests.get(
+            f"{API_BASE_URL}/api/git/status",
+            headers=_get_headers(auth_token),
+            timeout=10
+        )
+        return response.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+# ==========================================
+# FIX REQUESTS
+# ==========================================
+
+def call_fix_api(trace_error: str, auth_token: str, priority: int = 1, metadata: dict = None):
     """
-    Backend: DELETE /api/fix/cancel/{request_id}
+    POST /api/fix - Gửi yêu cầu sửa lỗi.
+    Theo spec, trace_error truyền cả ở query và body.
     """
+    try:
+        response = requests.post(
+            f"{API_BASE_URL}/api/fix",
+            headers=_get_headers(auth_token),
+            params={"trace_error": trace_error},
+            json={
+                "trace_error": trace_error,
+                "priority": priority,
+                "metadata": metadata
+            },
+            timeout=60
+        )
+        return response.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+def call_fix_status(request_id: str, auth_token: str):
+    """GET /api/fix/status/{request_id} - Xem trạng thái của tiến trình Fix"""
+    try:
+        response = requests.get(
+            f"{API_BASE_URL}/api/fix/status/{request_id}",
+            headers=_get_headers(auth_token),
+            timeout=10
+        )
+        return response.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+def call_cancel_fix(request_id: str, auth_token: str):
+    """DELETE /api/fix/cancel/{request_id} - Hủy tiến trình Fix"""
     try:
         response = requests.delete(
-            f"{API_BASE_URL}/cancel/{request_id}",
+            f"{API_BASE_URL}/api/fix/cancel/{request_id}",
+            headers=_get_headers(auth_token),
             timeout=10
         )
         return response.json()
     except Exception as e:
         return {"error": str(e)}
 
-def call_healcode_api(code: str):
-    # if USE_MOCK:
-    #     with open("mock/mock_healcode.json", "r") as f:
-    #         return json.load(f)
+# ==========================================
+# QUEUE & TASKS
+# ==========================================
 
-    # REAL API (later)
-    # if code == "cred":
-    #     response = requests.get(
-    #         # "{API_BASE_URL}/credentials",
-    #         "{API_BASE_URL}/health",
-    #         json={},
-    #         timeout=10
-    #     )
-    #     return response.json()
-    if code == "start":
-        # Truyền đúng dictionary thay vì chỉ gọi biến id
-        response = requests.post(
-            f"{API_BASE_URL}/start",
-            json={"id": "dummy_id", "name": "dummy_name", "token": "dummy"},
-            timeout=10
-        )
-        return response.json()
-    
-    elif code == "list":
+def get_queue_stats(auth_token: str):
+    """GET /api/queue/stats - Thống kê hàng đợi"""
+    try:
         response = requests.get(
-            f"{API_BASE_URL}/list",
-            json={},
+            f"{API_BASE_URL}/api/queue/stats",
+            headers=_get_headers(auth_token),
             timeout=10
         )
         return response.json()
-    
-    elif code == "repo":
-        response = requests.get(
-            f"{API_BASE_URL}/repo",
-            json={},
-            timeout=10
-        )
-        return response.json()
-    
-    elif code == "branch":
-        response = requests.get(
-            f"{API_BASE_URL}/branch",
-            json={},
-            timeout=10
-        )
-        return response.json()
-    
-    elif code == "cursor":
-        response = requests.get(
-            f"{API_BASE_URL}/cursor",
-            json={},
-            timeout=10
-        )
-        return response.json()
-        
-    elif code == "status":
-        response = requests.get(
-            f"{API_BASE_URL}/status",
-            json={},
-            timeout=10
-        )
-        return response.json()
-    
-    elif code == "health":
-        response = requests.get(
-            f"{API_BASE_URL}/health",
-            json={},
-            timeout=10
-        )
-        return response.json()
-    
-    elif code == "cancel":
-        response = requests.get(
-            f"{API_BASE_URL}/cancel/{request_id}",
-            json={},
-            timeout=10
-        )
-        return response.json()
+    except Exception as e:
+        return {"error": str(e)}
 
-    
-# res=call_healcode_api("health")
-# print(res)
+def get_all_tasks(auth_token: str, status: str = None):
+    """GET /api/queue/tasks - Lấy tất cả tasks (có thể filter theo status)"""
+    try:
+        params = {"status": status} if status else {}
+        response = requests.get(
+            f"{API_BASE_URL}/api/queue/tasks",
+            headers=_get_headers(auth_token),
+            params=params,
+            timeout=10
+        )
+        return response.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+def get_repo_tasks(auth_token: str, status: str = None):
+    """GET /api/repos/tasks - Lấy các tasks của repo cụ thể"""
+    try:
+        params = {"status": status} if status else {}
+        response = requests.get(
+            f"{API_BASE_URL}/api/repos/tasks",
+            headers=_get_headers(auth_token),
+            params=params,
+            timeout=10
+        )
+        return response.json()
+    except Exception as e:
+        return {"error": str(e)}

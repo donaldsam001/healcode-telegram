@@ -1,191 +1,195 @@
 import os
+import json
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from healcode_api import *
-
+# Import toàn bộ hàm từ file healcode_api mới
+from healcode_api import (
+    call_credential_create,
+    get_list_repo,
+    add_repo,
+    switch_branch,
+    get_git_status,
+    call_fix_api,
+    call_cancel_fix,
+    get_queue_stats,
+    get_all_tasks
+)
 
 # Load environment variables from .env.local
 load_dotenv('.env.local')
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+API_AUTH_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1dWlkIjoiNDAyNDNlNWMtYjQzMS00ZDY4LWJjYjItZTliZjB" \
+"iMTEwMzE5IiwiZXhwIjoxODA3NjA0MzAwfQ.4JAiTbBJhvatwB7FzeutmfbYmYMy03tAzl-VovGKTUY" # Token này dùng để gọi API
 
-# done
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    username = update.effective_user.username
-    print("Username:", username)
+    username = update.effective_user.username or "User"
+    print(f"Username: {username}")
 
-    result = call_start_api( username)
+    # Khởi tạo profile
+    result = call_credential_create(username=username, provider_id="telegram")
     print("API Result:", result)
 
     menu_text = (
-        "Hello "  + username + "!\n\n"
+        f"Hello {username}!\n\n"
         "🤖 **Healcode Bot Ready!**\n"
-        "I can help you analyze, refactor, and manage your code repositories. "
-        "If you're new to the workflow, please see the documentation.\n\n"
+        "I can help you analyze, refactor, and manage your code repositories.\n\n"
         
-        "You can control the pipeline by sending these commands:\n\n"
-        "/list (get all repos)\n"
-        "/repo link\n"
-        "/branch name\n"
-        "/cursor \n"
-        "/fix (issue or none for all)\n"
-        "/cancel \n"
-        "/status \n\n"
+        "Danh sách các lệnh hỗ trợ:\n"
+        "🔹 `/list` - Xem danh sách Repositories\n"
+        "🔹 `/repo <url> [branch]` - Thêm/Clone một repo mới\n"
+        "🔹 `/branches <branch_name>` - Đổi nhánh làm việc (Git checkout)\n"
+        "🔹 `/cursor` - Xem vị trí/trạng thái Git hiện tại\n"
+        "🔹 `/fix <mô_tả_lỗi>` - Yêu cầu AI sửa lỗi\n"
+        "🔹 `/cancel <request_id>` - Hủy tiến trình fix\n"
+        "🔹 `/status` - Xem trạng thái hệ thống/hàng đợi\n"
     )
-
-    await update.message.reply_text(menu_text)
+    await update.message.reply_text(menu_text, parse_mode='Markdown')
 
 async def list_repo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔄 Đang lấy danh sách repository...")
     
-    result = call_healcode_api("list")
+    result = get_list_repo(auth_token=API_AUTH_TOKEN)
     
-    msg = "📂 **Danh sách Repository của bạn:**\n\n"
-    # Giả định API trả về list hoặc dict chứa key 'repos'
-    if isinstance(result, list):
-        for r in result:
-            msg += f"📦 `{r}`\n"
-    elif isinstance(result, dict) and "repos" in result:
-        for r in result["repos"]:
-            msg += f"📦 `{r.get('name', r)}`\n"
-    else:
-        msg += f"Dữ liệu trả về: {result}"
-        
-    await update.message.reply_text(msg)
-
-async def repo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # 1. Kiểm tra xem người dùng có nhập tham số không (context.args có rỗng không)
-    if not context.args:
-        await update.message.reply_text("⚠️ Vui lòng nhập đường dẫn repo.\nVí dụ: /repo https://github.com/username/project.git your_token")
+    # Kiểm tra nếu API trả về lỗi
+    if isinstance(result, dict) and "error" in result:
+        await update.message.reply_text(f"❌ Lỗi: {result['error']}")
         return
 
-    # 2. Lấy tham số đầu tiên (chính là link repo người dùng nhập)
-    repo_url = context.args[0]
-
-    if len(context.args) < 2:
-        await update.message.reply_text("⚠️ Vui lòng nhập branch.\n")
-    branch = context.args[1]
-
-    # 3. Xử lý logic với tham số vừa nhận được
-    # (Ví dụ: Tạo payload code dựa trên repo_url để gửi đi)
-    
-    # Gọi API với tham số thực tế
-    result = call_repo_api(repo_url, branch)
-
-    msg = f"🧠 Healcode Result cho repo {repo_url}:\n"
-    
-    # Kiểm tra xem API có trả về suggestions không để tránh lỗi
-    if "suggestions" in result:
-        for s in result["suggestions"]:
-            msg += f"• {s}\n"
+    msg = "📂 **Danh sách Repository của bạn:**\n\n"
+    # Giả định API trả về list
+    if isinstance(result, list):
+        if not result:
+            msg += "📭 Chưa có repository nào."
+        else:
+            for r in result:
+                msg += f"📦 `{r}`\n"
     else:
-        msg += "Không tìm thấy gợi ý nào hoặc có lỗi xảy ra."
+        # Nếu backend trả về JSON stringified Object
+        msg += f"```json\n{json.dumps(result, indent=2)}\n```"
+        
+    await update.message.reply_text(msg, parse_mode='Markdown')
 
-    await update.message.reply_text(msg)
+async def repo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("⚠️ Vui lòng nhập đường dẫn repo.\nVí dụ: `/repo https://github.com/user/repo.git main`", parse_mode='Markdown')
+        return
+
+    repo_url = context.args[0]
+    branch = context.args[1] if len(context.args) > 1 else "main"
+
+    await update.message.reply_text(f"📥 Đang clone/thiết lập repo `{repo_url}` (Nhánh: `{branch}`)...", parse_mode='Markdown')
+    
+    result = add_repo(url=repo_url, branch=branch, auth_token=API_AUTH_TOKEN)
+
+    if isinstance(result, dict) and "error" in result:
+        msg = f"❌ **Lỗi:** {result['error']}"
+    else:
+        msg = f"✅ **Phản hồi từ hệ thống:**\n```json\n{json.dumps(result, indent=2)}\n```"
+
+    await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def branches(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("⚠️ Vui lòng nhập tên branch muốn đổi.\nVí dụ: /branches feature-login")
+        await update.message.reply_text("⚠️ Vui lòng nhập tên branch muốn đổi.\nVí dụ: `/branches feature-login`", parse_mode='Markdown')
         return
 
     branch_name = context.args[0]
-    await update.message.reply_text(f"🌿 Đang yêu cầu chuyển sang nhánh `{branch_name}`...")
+    await update.message.reply_text(f"🌿 Đang yêu cầu chuyển sang nhánh `{branch_name}`...", parse_mode='Markdown')
 
-    # Tùy thuộc vào backend, bạn có thể cần truyền tên branch vào body. 
-    # Ở đây sử dụng hàm mặc định bạn đã viết sẵn.
-    result = call_healcode_api("branch")
+    result = switch_branch(branch=branch_name, auth_token=API_AUTH_TOKEN)
     
-    await update.message.reply_text(f"🔄 **Phản hồi từ hệ thống:**\n{result}")
+    if isinstance(result, dict) and "error" in result:
+        msg = f"❌ **Lỗi:** {result['error']}"
+    else:
+        msg = f"🔄 **Phản hồi:**\n```json\n{json.dumps(result, indent=2)}\n```"
+
+    await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def cursor(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔍 Đang truy xuất thông tin vị trí làm việc (cursor) của bạn...")
+    await update.message.reply_text("🔍 Đang truy xuất trạng thái Git hiện tại của bạn...")
     
-    result = call_healcode_api("cursor")
+    result = get_git_status(auth_token=API_AUTH_TOKEN)
     
-    await update.message.reply_text(f"📍 **Vị trí hiện tại của bạn:**\n`{result}`")
+    if isinstance(result, dict) and "error" in result:
+        msg = f"❌ **Lỗi:** {result['error']}"
+    else:
+        msg = f"📍 **Vị trí/Trạng thái hiện tại:**\n```json\n{json.dumps(result, indent=2)}\n```"
+
+    await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def fix(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Cần: Tên repo (để tạo path URL) và lỗi (trace error)
-    if len(context.args) < 2:
-        await update.message.reply_text("⚠️ Cú pháp: /fix <tên_repo> <mô_tả_lỗi>\nVí dụ: /fix my-project 'IndexError at line 10'")
+    # Lệnh fix mới không cần repo_name nữa
+    if not context.args:
+        await update.message.reply_text("⚠️ Cú pháp: `/fix <mô_tả_lỗi>`\nVí dụ: `/fix IndexError at line 10 in main.py`", parse_mode='Markdown')
         return
 
-    repo_name = context.args[0]
-    # Nối tất cả các từ còn lại thành chuỗi lỗi
-    issue = " ".join(context.args[1:])
+    # Nối tất cả các từ thành chuỗi lỗi
+    issue = " ".join(context.args)
 
-    await update.message.reply_text(f"🛠 Đang gửi yêu cầu fix cho repo `{repo_name}`...")
+    await update.message.reply_text(f"🛠 Đang gửi yêu cầu phân tích và sửa lỗi...\n📝 **Trace:** `{issue}`", parse_mode='Markdown')
 
-    result = call_fix_api(repo_name, issue)
+    result = call_fix_api(trace_error=issue, auth_token=API_AUTH_TOKEN)
 
-    # Backend trả về FixResponseModel (request_id, status, message...)
-    if "request_id" in result:
-        msg = (
-            f"✅ **Đã nhận yêu cầu!**\n"
-            f"🆔 ID: `{result['request_id']}`\n"
-            f"📌 Trạng thái: {result['status']}\n"
-            f"📝 Message: {result['message']}"
-        )
+    if isinstance(result, dict) and "error" in result:
+        msg = f"❌ **Lỗi:** {result.get('error')}"
+    elif "detail" in result: # Lỗi Validation (422)
+        msg = f"❌ **Validation Error:** {result['detail']}"
     else:
-        msg = f"❌ Lỗi: {result.get('detail') or result.get('error')}"
+        # Nếu thành công
+        msg = f"✅ **Đã nhận yêu cầu Fix!**\n```json\n{json.dumps(result, indent=2)}\n```"
 
-    await update.message.reply_text(msg)
+    await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Cần 2 tham số: Tên repo và ID của yêu cầu fix
-    if len(context.args) < 2:
-        await update.message.reply_text("⚠️ Cú pháp: /cancel <tên_repo> <request_id>\nVí dụ: /cancel my-project req_123")
+    if not context.args:
+        await update.message.reply_text("⚠️ Cú pháp: `/cancel <request_id>`\nVí dụ: `/cancel req_12345`", parse_mode='Markdown')
         return
 
-    repo_name = context.args[0]
-    request_id = context.args[1]
+    request_id = context.args[0]
 
-    await update.message.reply_text(f"🛑 Đang gửi yêu cầu hủy cho task `{request_id}` của repo `{repo_name}`...")
+    await update.message.reply_text(f"🛑 Đang gửi yêu cầu hủy task `{request_id}`...", parse_mode='Markdown')
 
-    result = call_cancel_api(repo_name, request_id)
+    result = call_cancel_fix(request_id=request_id, auth_token=API_AUTH_TOKEN)
 
-    # Xử lý phản hồi từ backend
-    if "message" in result:
-        msg = f"✅ **Thành công:** {result['message']}"
+    if isinstance(result, dict) and "error" in result:
+        msg = f"❌ **Lỗi:** {result['error']}"
     else:
-        msg = f"❌ **Lỗi:** {result.get('detail', result.get('error', 'Không thể hủy task'))}"
+        msg = f"✅ **Kết quả Hủy:**\n```json\n{json.dumps(result, indent=2)}\n```"
 
-    await update.message.reply_text(msg)
+    await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # API status của backend lấy toàn bộ repo, không cần tham số url/token từ user
-    await update.message.reply_text("🔄 Checking system status...")
+    await update.message.reply_text("🔄 Checking status...")
 
-    result = call_status_api()
+    # Gọi API thống kê
+    stats_result = get_git_status(auth_token=API_AUTH_TOKEN)
+    
+    # Tùy chọn: Bạn có thể gọi thêm get_all_tasks() nếu muốn hiển thị chi tiết
+    # tasks_result = get_all_tasks(auth_token=API_AUTH_TOKEN)
 
-    # Backend trả về: {"count": n, "repos": [...], "storage_root": ...}
-    if "repos" in result:
-        repos = result["repos"]
-        if not repos:
-            msg = "📭 Chưa có repository nào trong hệ thống."
-        else:
-            msg = f"📊 **System Status ({result.get('count', 0)} repos):**\n\n"
-            for r in repos:
-                # r = {"name": "...", "status": "...", "path": "..."}
-                msg += f"📦 **Repo:** `{r['name']}`\n   Trạng thái: {r['status']}\n\n"
+    if isinstance(stats_result, dict) and "error" in stats_result:
+        msg = f"❌ Lỗi khi lấy trạng thái: {stats_result['error']}"
     else:
-        msg = f"❌ Lỗi khi lấy trạng thái: {result}"
+        msg = f"📊 **System Queue Stats:**\n```json\n{json.dumps(stats_result, indent=2)}\n```"
 
-    await update.message.reply_text(msg)
+    await update.message.reply_text(msg, parse_mode='Markdown')
 
-# Get the token from environment variable
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 
-if not TELEGRAM_BOT_TOKEN:
-    raise ValueError("TELEGRAM_BOT_TOKEN not found in .env.local file")
-
-app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-# Xóa các dòng app.add_handler cũ và thay bằng:
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("list", list_repo))    # /list
-app.add_handler(CommandHandler("repo", repo))         # /repo
-app.add_handler(CommandHandler("branches", branches)) # /branches
-app.add_handler(CommandHandler("cursor", cursor))     # /cursor
-app.add_handler(CommandHandler("fix", fix))           # /fix
-app.add_handler(CommandHandler("cancel", cancel))     # /cancel
-app.add_handler(CommandHandler("status", status))     # /status
-app.run_polling()
+if __name__ == "__main__":
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    
+    # Đăng ký các handler
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("list", list_repo))
+    app.add_handler(CommandHandler("repo", repo))
+    app.add_handler(CommandHandler("branches", branches))
+    app.add_handler(CommandHandler("cursor", cursor))
+    app.add_handler(CommandHandler("fix", fix))
+    app.add_handler(CommandHandler("cancel", cancel))
+    app.add_handler(CommandHandler("status", status))
+    
+    print("🤖 Bot đang chạy...")
+    app.run_polling()
