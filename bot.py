@@ -1,187 +1,289 @@
-import os
+import asyncio
 import json
+import os
+from typing import Dict, Optional
+
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from healcode_api import *
-# Import toàn bộ hàm từ file healcode_api mới
-from healcode_api import (
-    call_credential_create,
-    get_list_repo,
-    add_repo,
-    switch_branch,
-    get_git_status,
-    call_fix_api,
-    call_cancel_fix,
-    get_queue_stats,
-    get_all_tasks
-)
 
-# Load environment variables from .env.local
-load_dotenv('.env.local')
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-API_AUTH_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1dWlkIjoiNDAyNDNlNWMtYjQzMS00ZDY4LWJjYjItZTliZjB" \
-"iMTEwMzE5IiwiZXhwIjoxODA3NjA0MzAwfQ.4JAiTbBJhvatwB7FzeutmfbYmYMy03tAzl-VovGKTUY" # Token này dùng để gọi API
+from auth_token import Database
+from client import HealCodeClient
+
+
+load_dotenv()
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+db = Database()
+user_clients: Dict[int, HealCodeClient] = {}
+
+
+async def remove_client(user_id: int):
+    user_clients.pop(int(user_id), None)
+
+
+def _extract_token(payload: dict) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("auth_token", "token", "access_token", "jwt"):
+        value = payload.get(key)
+        if value:
+            return value
+    data = payload.get("data")
+    if isinstance(data, dict):
+        for key in ("auth_token", "token", "access_token", "jwt"):
+            value = data.get(key)
+            if value:
+                return value
+    return None
+
+
+async def _build_client(user_id: int) -> HealCodeClient:
+    client = await HealCodeClient.create(user_id, db)
+    client.set_invalidation_callback(remove_client)
+    return client
+
+
+async def _get_or_restore_client(user_id: int) -> Optional[HealCodeClient]:
+    client = user_clients.get(user_id)
+    if client and client.is_valid:
+        return client
+    if client and not client.is_valid:
+        await remove_client(user_id)
+
+    restored_client = await _build_client(user_id)
+    if not restored_client.api_auth_token:
+        return None
+
+    user_clients[user_id] = restored_client
+    return restored_client
+
+
+def _is_unauthorized(result: dict) -> bool:
+    if not isinstance(result, dict):
+        return False
+    return result.get("status_code") == 401 or str(result.get("error", "")).lower() == "unauthorized"
+
+
+async def _require_client(update: Update) -> Optional[HealCodeClient]:
+    user = update.effective_user
+    if user is None:
+        return None
+
+    client = await _get_or_restore_client(user.id)
+    if client:
+        return client
+
+    await update.message.reply_text(
+        "❌ Chua tim thay phien dang nhap. Vui long chay `/start` de khoi tao lai.",
+        parse_mode="Markdown",
+    )
+    return None
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    username = update.effective_user.username or "User"
-    print(f"Username: {username}")
+    user = update.effective_user
+    if user is None:
+        return
 
-    # Khởi tạo profile
-    result = call_credential_create(username=username, provider_id="telegram")
-    print("API Result:", result)
+    user_id = user.id
+    username = user.username or str(user_id)
+    client = await _build_client(user_id)
+
+    credential_result = await client.credential_create(username=username, provider_id="telegram")
+    token = _extract_token(credential_result)
+    if token:
+        await client.set_token(token)
+
+    user_clients[user_id] = client
 
     menu_text = (
         f"Hello {username}!\n\n"
-        "🤖 **Healcode Bot Ready!**\n"
-        "I can help you analyze, refactor, and manage your code repositories.\n\n"
-        
-        "Danh sách các lệnh hỗ trợ:\n"
-        "🔹 `/list` - Xem danh sách Repositories\n"
-        "🔹 `/repo <url> [branch]` - Thêm/Clone một repo mới\n"
-        "🔹 `/branches <branch_name>` - Đổi nhánh làm việc (Git checkout)\n"
-        "🔹 `/cursor` - Xem vị trí/trạng thái Git hiện tại\n"
-        "🔹 `/fix <mô_tả_lỗi>` - Yêu cầu AI sửa lỗi\n"
-        "🔹 `/cancel <request_id>` - Hủy tiến trình fix\n"
-        "🔹 `/status` - Xem trạng thái hệ thống/hàng đợi\n"
+        "Healcode Bot Ready.\n\n"
+        "Danh sach lenh ho tro:\n"
+        "`/list` - Xem danh sach Repositories\n"
+        "`/repo <url> [branch]` - Them/Clone mot repo moi\n"
+        "`/branches <branch_name>` - Doi nhanh lam viec\n"
+        "`/cursor` - Xem trang thai Git hien tai\n"
+        "`/fix <mo_ta_loi>` - Yeu cau AI sua loi\n"
+        "`/cancel <request_id>` - Huy tien trinh fix\n"
+        "`/status` - Xem trang thai he thong\n"
     )
-    await update.message.reply_text(menu_text, parse_mode='Markdown')
+
+    if _is_unauthorized(credential_result):
+        menu_text += "\nCan xac thuc lai. Vui long chay `/start` lai sau."
+    elif isinstance(credential_result, dict) and "error" in credential_result and not token:
+        menu_text += f"\nBackend tra ve loi: `{credential_result.get('error')}`"
+
+    await update.message.reply_text(menu_text, parse_mode="Markdown")
+
 
 async def list_repo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 Đang lấy danh sách repository...")
-    
-    result = get_list_repo(auth_token=API_AUTH_TOKEN)
-    
-    # Kiểm tra nếu API trả về lỗi
-    if isinstance(result, dict) and "error" in result:
-        await update.message.reply_text(f"❌ Lỗi: {result['error']}")
+    client = await _require_client(update)
+    if not client:
         return
 
-    msg = "📂 **Danh sách Repository của bạn:**\n\n"
-    # Giả định API trả về list
+    await update.message.reply_text("Dang lay danh sach repository...")
+    result = await client.get_list_repo()
+
+    if _is_unauthorized(result):
+        await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
+        return
+    if isinstance(result, dict) and "error" in result:
+        await update.message.reply_text(f"❌ Loi: {result['error']}")
+        return
+
+    msg = "Danh sach Repository cua ban:\n\n"
     if isinstance(result, list):
         if not result:
-            msg += "📭 Chưa có repository nào."
+            msg += "Chua co repository nao."
         else:
-            for r in result:
-                msg += f"📦 `{r}`\n"
+            for repo_item in result:
+                msg += f"- `{repo_item}`\n"
     else:
-        # Nếu backend trả về JSON stringified Object
         msg += f"```json\n{json.dumps(result, indent=2)}\n```"
-        
-    await update.message.reply_text(msg, parse_mode='Markdown')
+
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
 
 async def repo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    client = await _require_client(update)
+    if not client:
+        return
     if not context.args:
-        await update.message.reply_text("⚠️ Vui lòng nhập đường dẫn repo.\nVí dụ: `/repo https://github.com/user/repo.git main`", parse_mode='Markdown')
+        await update.message.reply_text(
+            "Cau lenh: `/repo https://github.com/user/repo.git main`",
+            parse_mode="Markdown",
+        )
         return
 
     repo_url = context.args[0]
     branch = context.args[1] if len(context.args) > 1 else "main"
+    await update.message.reply_text(f"Dang clone repo `{repo_url}` (branch `{branch}`)...", parse_mode="Markdown")
 
-    await update.message.reply_text(f"📥 Đang clone/thiết lập repo `{repo_url}` (Nhánh: `{branch}`)...", parse_mode='Markdown')
-    
-    result = add_repo(url=repo_url, branch=branch, auth_token=API_AUTH_TOKEN)
+    result = await client.add_repo(url=repo_url, branch=branch)
+    if _is_unauthorized(result):
+        await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
+        return
 
     if isinstance(result, dict) and "error" in result:
-        msg = f"❌ **Lỗi:** {result['error']}"
+        msg = f"❌ Loi: {result['error']}"
     else:
-        msg = f"✅ **Phản hồi từ hệ thống:**\n```json\n{json.dumps(result, indent=2)}\n```"
+        msg = f"✅ Phan hoi:\n```json\n{json.dumps(result, indent=2)}\n```"
+    await update.message.reply_text(msg, parse_mode="Markdown")
 
-    await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def branches(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    client = await _require_client(update)
+    if not client:
+        return
     if not context.args:
-        await update.message.reply_text("⚠️ Vui lòng nhập tên branch muốn đổi.\nVí dụ: `/branches feature-login`", parse_mode='Markdown')
+        await update.message.reply_text("Cau lenh: `/branches feature-login`", parse_mode="Markdown")
         return
 
     branch_name = context.args[0]
-    await update.message.reply_text(f"🌿 Đang yêu cầu chuyển sang nhánh `{branch_name}`...", parse_mode='Markdown')
+    await update.message.reply_text(f"Dang chuyen sang branch `{branch_name}`...", parse_mode="Markdown")
+    result = await client.switch_branch(branch=branch_name)
 
-    result = switch_branch(branch=branch_name, auth_token=API_AUTH_TOKEN)
-    
+    if _is_unauthorized(result):
+        await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
+        return
     if isinstance(result, dict) and "error" in result:
-        msg = f"❌ **Lỗi:** {result['error']}"
+        msg = f"❌ Loi: {result['error']}"
     else:
-        msg = f"🔄 **Phản hồi:**\n```json\n{json.dumps(result, indent=2)}\n```"
+        msg = f"✅ Phan hoi:\n```json\n{json.dumps(result, indent=2)}\n```"
+    await update.message.reply_text(msg, parse_mode="Markdown")
 
-    await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def cursor(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔍 Đang truy xuất trạng thái Git hiện tại của bạn...")
-    
-    result = get_git_status(auth_token=API_AUTH_TOKEN)
-    
-    if isinstance(result, dict) and "error" in result:
-        msg = f"❌ **Lỗi:** {result['error']}"
-    else:
-        msg = f"📍 **Vị trí/Trạng thái hiện tại:**\n```json\n{json.dumps(result, indent=2)}\n```"
-
-    await update.message.reply_text(msg, parse_mode='Markdown')
-
-async def fix(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Lệnh fix mới không cần repo_name nữa
-    if not context.args:
-        await update.message.reply_text("⚠️ Cú pháp: `/fix <mô_tả_lỗi>`\nVí dụ: `/fix IndexError at line 10 in main.py`", parse_mode='Markdown')
+    client = await _require_client(update)
+    if not client:
         return
 
-    # Nối tất cả các từ thành chuỗi lỗi
-    issue = " ".join(context.args)
+    await update.message.reply_text("Dang lay trang thai Git...")
+    result = await client.get_status()
 
-    await update.message.reply_text(f"🛠 Đang gửi yêu cầu phân tích và sửa lỗi...\n📝 **Trace:** `{issue}`", parse_mode='Markdown')
-
-    result = call_fix_api(trace_error=issue, auth_token=API_AUTH_TOKEN)
-
+    if _is_unauthorized(result):
+        await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
+        return
     if isinstance(result, dict) and "error" in result:
-        msg = f"❌ **Lỗi:** {result.get('error')}"
-    elif "detail" in result: # Lỗi Validation (422)
-        msg = f"❌ **Validation Error:** {result['detail']}"
+        msg = f"❌ Loi: {result['error']}"
     else:
-        # Nếu thành công
-        msg = f"✅ **Đã nhận yêu cầu Fix!**\n```json\n{json.dumps(result, indent=2)}\n```"
+        msg = f"📍 Trang thai hien tai:\n```json\n{json.dumps(result, indent=2)}\n```"
+    await update.message.reply_text(msg, parse_mode="Markdown")
 
-    await update.message.reply_text(msg, parse_mode='Markdown')
+
+async def fix(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    client = await _require_client(update)
+    if not client:
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Cau lenh: `/fix <mo_ta_loi>`\nVi du: `/fix IndexError at line 10 in main.py`",
+            parse_mode="Markdown",
+        )
+        return
+
+    issue = " ".join(context.args)
+    await update.message.reply_text(f"Dang gui yeu cau fix...\nTrace: `{issue}`", parse_mode="Markdown")
+    result = await client.call_fix_api(trace_error=issue)
+
+    if _is_unauthorized(result):
+        await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
+        return
+    if isinstance(result, dict) and "error" in result:
+        msg = f"❌ Loi: {result.get('error')}"
+    elif isinstance(result, dict) and "detail" in result and result.get("status_code") == 422:
+        msg = f"❌ Validation Error: {result['detail']}"
+    else:
+        msg = f"✅ Da nhan yeu cau Fix:\n```json\n{json.dumps(result, indent=2)}\n```"
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    client = await _require_client(update)
+    if not client:
+        return
     if not context.args:
-        await update.message.reply_text("⚠️ Cú pháp: `/cancel <request_id>`\nVí dụ: `/cancel req_12345`", parse_mode='Markdown')
+        await update.message.reply_text("Cau lenh: `/cancel <request_id>`", parse_mode="Markdown")
         return
 
     request_id = context.args[0]
+    await update.message.reply_text(f"Dang huy task `{request_id}`...", parse_mode="Markdown")
+    result = await client.call_cancel_fix(request_id=request_id)
 
-    await update.message.reply_text(f"🛑 Đang gửi yêu cầu hủy task `{request_id}`...", parse_mode='Markdown')
-
-    result = call_cancel_fix(request_id=request_id, auth_token=API_AUTH_TOKEN)
-
+    if _is_unauthorized(result):
+        await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
+        return
     if isinstance(result, dict) and "error" in result:
-        msg = f"❌ **Lỗi:** {result['error']}"
+        msg = f"❌ Loi: {result['error']}"
     else:
-        msg = f"✅ **Kết quả Hủy:**\n```json\n{json.dumps(result, indent=2)}\n```"
+        msg = f"✅ Ket qua huy:\n```json\n{json.dumps(result, indent=2)}\n```"
+    await update.message.reply_text(msg, parse_mode="Markdown")
 
-    await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 Checking status...")
+    client = await _require_client(update)
+    if not client:
+        return
 
-    # Gọi API thống kê
-    stats_result = get_git_status(auth_token=API_AUTH_TOKEN)
-    
-    # Tùy chọn: Bạn có thể gọi thêm get_all_tasks() nếu muốn hiển thị chi tiết
-    # tasks_result = get_all_tasks(auth_token=API_AUTH_TOKEN)
+    await update.message.reply_text("Dang kiem tra status...")
+    result = await client.get_status()
 
-    if isinstance(stats_result, dict) and "error" in stats_result:
-        msg = f"❌ Lỗi khi lấy trạng thái: {stats_result['error']}"
+    if _is_unauthorized(result):
+        await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
+        return
+    if isinstance(result, dict) and "error" in result:
+        msg = f"❌ Loi khi lay trang thai: {result['error']}"
     else:
-        msg = f"📊 **System Queue Stats:**\n```json\n{json.dumps(stats_result, indent=2)}\n```"
-
-    await update.message.reply_text(msg, parse_mode='Markdown')
+        msg = f"📊 System Status:\n```json\n{json.dumps(result, indent=2)}\n```"
+    await update.message.reply_text(msg, parse_mode="Markdown")
 
 
 if __name__ == "__main__":
+    asyncio.run(db.init())
+
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-    
-    # Đăng ký các handler
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("list", list_repo))
     app.add_handler(CommandHandler("repo", repo))
@@ -190,6 +292,6 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("fix", fix))
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CommandHandler("status", status))
-    
-    print("🤖 Bot đang chạy...")
+
+    print("Bot dang chay...")
     app.run_polling()
