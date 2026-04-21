@@ -65,6 +65,14 @@ def _is_unauthorized(result: dict) -> bool:
     return result.get("status_code") == 401 or str(result.get("error", "")).lower() == "unauthorized"
 
 
+def _format_error(result: dict) -> str:
+    error_text = str(result.get("error", "Unknown error"))
+    status_code = result.get("status_code")
+    if status_code is not None:
+        return f"❌ Loi [{status_code}]: {error_text}"
+    return f"❌ Loi: {error_text}"
+
+
 async def _require_client(update: Update) -> Optional[HealCodeClient]:
     user = update.effective_user
     if user is None:
@@ -130,7 +138,7 @@ async def list_repo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
         return
     if isinstance(result, dict) and "error" in result:
-        await update.message.reply_text(f"❌ Loi: {result['error']}")
+        await update.message.reply_text(_format_error(result))
         return
 
     msg = "Danh sach Repository cua ban:\n\n"
@@ -167,7 +175,7 @@ async def repo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if isinstance(result, dict) and "error" in result:
-        msg = f"❌ Loi: {result['error']}"
+        msg = _format_error(result)
     else:
         msg = f"✅ Phan hoi:\n```json\n{json.dumps(result, indent=2)}\n```"
     await update.message.reply_text(msg, parse_mode="Markdown")
@@ -189,7 +197,7 @@ async def branches(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
         return
     if isinstance(result, dict) and "error" in result:
-        msg = f"❌ Loi: {result['error']}"
+        msg = _format_error(result)
     else:
         msg = f"✅ Phan hoi:\n```json\n{json.dumps(result, indent=2)}\n```"
     await update.message.reply_text(msg, parse_mode="Markdown")
@@ -207,7 +215,7 @@ async def cursor(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
         return
     if isinstance(result, dict) and "error" in result:
-        msg = f"❌ Loi: {result['error']}"
+        msg = _format_error(result)
     else:
         msg = f"📍 Trang thai hien tai:\n```json\n{json.dumps(result, indent=2)}\n```"
     await update.message.reply_text(msg, parse_mode="Markdown")
@@ -232,7 +240,7 @@ async def fix(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
         return
     if isinstance(result, dict) and "error" in result:
-        msg = f"❌ Loi: {result.get('error')}"
+        msg = _format_error(result)
     elif isinstance(result, dict) and "detail" in result and result.get("status_code") == 422:
         msg = f"❌ Validation Error: {result['detail']}"
     else:
@@ -256,7 +264,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
         return
     if isinstance(result, dict) and "error" in result:
-        msg = f"❌ Loi: {result['error']}"
+        msg = _format_error(result)
     else:
         msg = f"✅ Ket qua huy:\n```json\n{json.dumps(result, indent=2)}\n```"
     await update.message.reply_text(msg, parse_mode="Markdown")
@@ -274,7 +282,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
         return
     if isinstance(result, dict) and "error" in result:
-        msg = f"❌ Loi khi lay trang thai: {result['error']}"
+        msg = _format_error(result)
     else:
         msg = f"📊 System Status:\n```json\n{json.dumps(result, indent=2)}\n```"
     await update.message.reply_text(msg, parse_mode="Markdown")

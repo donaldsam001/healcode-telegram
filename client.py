@@ -122,17 +122,40 @@ class HealCodeClient:
             return {"error": "Unauthorized", "status_code": 401}
 
         content_type = response.headers.get("Content-Type", "")
+        payload: Any
         if "application/json" in content_type:
-            payload = response.json()
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = {"message": response.text[:300]}
         else:
-            payload = {"detail": response.text[:300]}
+            payload = {"message": response.text[:300]}
 
-        if response.status_code >= 400:
-            if isinstance(payload, dict):
-                payload.setdefault("status_code", response.status_code)
-                payload.setdefault("error", f"HTTP {response.status_code}")
-                return payload
-            return {"error": f"HTTP {response.status_code}", "status_code": response.status_code}
+        return self._normalize_api_response(payload, response.status_code)
+
+    def _normalize_api_response(self, payload: Any, http_code: int) -> Any:
+        if not isinstance(payload, dict):
+            if http_code >= 400:
+                return {"error": f"HTTP {http_code}", "status_code": http_code}
+            return payload
+
+        # Contract backend uu tien: {status, code, message, data}
+        has_contract = any(key in payload for key in ("status", "code", "data", "message"))
+        if has_contract:
+            code = int(payload.get("code", http_code))
+            status_flag = payload.get("status")
+            success = bool(status_flag) and code < 400
+            message = payload.get("message")
+
+            if success:
+                return payload.get("data")
+
+            error_message = message or payload.get("error") or f"HTTP {code}"
+            return {"error": str(error_message), "status_code": code}
+
+        if http_code >= 400:
+            error_message = payload.get("message") or payload.get("detail") or payload.get("error") or f"HTTP {http_code}"
+            return {"error": str(error_message), "status_code": http_code}
 
         return payload
 
