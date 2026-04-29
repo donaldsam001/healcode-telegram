@@ -1,122 +1,339 @@
+import asyncio
+import json
 import os
+from typing import Dict, Optional
+
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from healcode_api import call_healcode_api
 
-# Load environment variables from .env.local
-load_dotenv('.env.local')
+from auth_token import Database
+from client import HealCodeClient
+
+
+load_dotenv()
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+db = Database()
+user_clients: Dict[int, HealCodeClient] = {}
+
+
+async def remove_client(user_id: int):
+    user_clients.pop(int(user_id), None)
+
+
+def _extract_token(payload: dict) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("auth_token", "token", "access_token", "jwt"):
+        value = payload.get(key)
+        if value:
+            return value
+    data = payload.get("data")
+    if isinstance(data, dict):
+        for key in ("auth_token", "token", "access_token", "jwt"):
+            value = data.get(key)
+            if value:
+                return value
+    return None
+
+
+async def _build_client(user_id: int) -> HealCodeClient:
+    client = await HealCodeClient.create(user_id, db)
+    client.set_invalidation_callback(remove_client)
+    return client
+
+
+async def _get_or_restore_client(user_id: int) -> Optional[HealCodeClient]:
+    client = user_clients.get(user_id)
+    if client and client.is_valid:
+        return client
+    if client and not client.is_valid:
+        await remove_client(user_id)
+
+    restored_client = await _build_client(user_id)
+    if not restored_client.api_auth_token:
+        return None
+
+    user_clients[user_id] = restored_client
+    return restored_client
+
+
+def _is_unauthorized(result: dict) -> bool:
+    if not isinstance(result, dict):
+        return False
+    return result.get("status_code") == 401 or str(result.get("error", "")).lower() == "unauthorized"
+
+
+def _format_error(result: dict) -> str:
+    error_text = str(result.get("error", "Unknown error"))
+    status_code = result.get("status_code")
+    if status_code is not None:
+        return f"❌ Loi [{status_code}]: {error_text}"
+    return f"❌ Loi: {error_text}"
+
+
+async def _require_client(update: Update) -> Optional[HealCodeClient]:
+    user = update.effective_user
+    if user is None:
+        return None
+
+    client = await _get_or_restore_client(user.id)
+    if client:
+        return client
+
+    await update.message.reply_text(
+        "❌ Chua tim thay phien dang nhap. Vui long chay `/start` de khoi tao lai.",
+        parse_mode="Markdown",
+    )
+    return None
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user is None:
+        return
+
+    user_id = user.id
+    username = user.username or str(user_id)
+    client = await _build_client(user_id)
+
+    credential_result = await client.credential_create(username=username, provider_id="telegram")
+    token = _extract_token(credential_result)
+    if token:
+        await client.set_token(token)
+
+    user_clients[user_id] = client
+
     menu_text = (
-        "🤖 **Healcode Bot Ready!**\n"
-        "I can help you analyze, refactor, and manage your code repositories. "
-        "If you're new to the workflow, please see the documentation.\n\n"
-        
-        "You can control the pipeline by sending these commands:\n\n"
-        
-        "**1. Request Handling & Parsing (API Layer)**\n"
-        "/analyze - Start the improvement workflow\n"
-        "/permissions - Check chat and user authentication\n"
-        "/validate - Test JSON schema for requests\n\n"
-        
-        "**2. Code Search & Context (Code Management)**\n"
-        "/search - Manually trigger Zoekt code search\n"
-        "/context - View current local repository snippets\n\n"
-        
-        "**3. AI & Refactoring Logic (AI Processing)**\n"
-        "/explain - Get a summary of the last AI operation\n"
-        "/refactor - Direct AI command for current file\n\n"
-        
-        "**4. Quality & Formatting (Code Quality)**\n"
-        "/lint - Run ESLint and Prettier on the workspace\n"
-        "/verify - Check for remaining syntax errors\n\n"
-        
-        "**5. Git & PR Operations (Git Integration)**\n"
-        "/branch - Create a new feature branch\n"
-        "/commit - Commit and push local changes\n"
-        "/pr - Submit a Pull Request to GitHub\n\n"
-        
-        "**6. Status & Monitoring (Storage & Utils)**\n"
-        "/status - View real-time processing logs\n"
-        "/errors - View the last failure report\n"
-        "/mockdata - Test the API with dummy data"
+        f"Hello {username}!\n\n"
+        "Healcode Bot Ready.\n\n"
+        "Danh sach lenh ho tro:\n"
+        "`/token <token>` - Xem token hien tai hoac cap nhat\n"
+        "`/list` - Xem danh sach Repositories\n"
+        "`/repo <url> [branch]` - Them/Clone mot repo moi\n"
+        "`/branches <branch_name>` - Doi nhanh lam viec\n"
+        "`/cursor` - Xem trang thai Git hien tai\n"
+        "`/fix <mo_ta_loi>` - Yeu cau AI sua loi\n"
+        "`/cancel <request_id>` - Huy tien trinh fix\n"
+        "`/status` - Xem trang thai he thong\n"
     )
 
-    await update.message.reply_text(menu_text)
+    if _is_unauthorized(credential_result):
+        menu_text += "\nCan xac thuc lai. Vui long chay `/start` lai sau."
+    elif isinstance(credential_result, dict) and "error" in credential_result and not token:
+        menu_text += f"\nBackend tra ve loi: `{credential_result.get('error')}`"
 
-async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    fake_code = "function test() {}"
-    result = call_healcode_api(fake_code)
+    await update.message.reply_text(menu_text, parse_mode="Markdown")
 
-    msg = "🧠 Healcode Result:\n"
-    for s in result["suggestions"]:
-        msg += f"• {s}\n"
+async def token_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    client = await _require_client(update)
+    if not client:
+        return
 
-    await update.message.reply_text(msg)
+    # Truong hop 1: Khong co tham so -> Xem token hien tai
+    if not context.args:
+        await update.message.reply_text("Dang lay thong tin token...")
+        result = await client.get_git_token()
+        
+        if _is_unauthorized(result):
+            await update.message.reply_text("Session het han. Vui long chay /start de tao session moi.")
+            return
+            
+        
+            await update.message.reply_text(f"Loi: {result.get('error')}")
+            return
+            
+        # Hien thi token, trong thuc te nen mask di mot phan de bao mat
+        msg = f"Thong tin token:\n```json\n{json.dumps(result, indent=2)}\n```"
+        await update.message.reply_text(msg, parse_mode="Markdown")
+        return
 
-async def mockdata(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    fake_code = "health"
-    result = call_healcode_api(fake_code)
-
-    msg = "🧠 Healcode Result:\n"
-    for s in result:
-        msg += f"• {s}: {result[s]}\n"
-
-    await update.message.reply_text(msg)
-
-
-# Get the token from environment variable
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-
-if not TELEGRAM_BOT_TOKEN:
-    raise ValueError("TELEGRAM_BOT_TOKEN not found in .env.local file")
-
-app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("analyze", analyze))
-app.add_handler(CommandHandler("mockdata", mockdata))
-# app.add_handler(CommandHandler("repo", repo))  # when implemented
-app.run_polling()
-
-
-
-# import logging
-# from telegram import Update
-# from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
-
-# # 1. Setup logging (crucial for debugging)
-# logging.basicConfig(
-#     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-#     level=logging.INFO
-# )
-
-# # 2. Command: /start
-# async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-#     await context.bot.send_message(
-#         chat_id=update.effective_chat.id, 
-#         text="I'm a bot, talk to me!"
-#     )
-
-# # 3. Echo handler: Repeats what you say
-# async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-#     await context.bot.send_message(
-#         chat_id=update.effective_chat.id, 
-#         text=f"You said: {update.message.text}"
-#     )
-
-# if __name__ == '__main__':
-#     # Replace 'YOUR_TOKEN_HERE' with your actual token
-#     MYTOKEN = '8542774756:AAFD7Qskm7tdefbsWLoXZgD9cExEZUhaDf8'
-#     application = ApplicationBuilder().token(MYTOKEN).build()
+    # Truong hop 2: Co tham so -> Cap nhat token moi
+    git_token = context.args[0]
+    await update.message.reply_text("Dang cap nhat token...")
     
-#     # Register handlers
-#     start_handler = CommandHandler('start', start)
-#     echo_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), echo)
+    # Goi api cap nhat thong qua client
+    result = await client.save_git_token(git_token)
+
+    if _is_unauthorized(result):
+        await update.message.reply_text("Session het han. Vui long chay /start de tao session moi.")
+        return
+        
     
-#     application.add_handler(start_handler)
-#     application.add_handler(echo_handler)
+        await update.message.reply_text(f"Loi cap nhat: {result.get('error')}")
+    else:
+        await update.message.reply_text("Cap nhat Git token thanh cong.")
+
+async def list_repo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    client = await _require_client(update)
+    if not client:
+        return
+
+    await update.message.reply_text("Dang lay danh sach repository...")
+    result = await client.get_list_repo()
+
+    if _is_unauthorized(result):
+        await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
+        return
     
-#     # Start the bot (Polling mode)
-#     print("Bot is running...")
-#     application.run_polling()
+        await update.message.reply_text(_format_error(result))
+        return
+
+    msg = "Danh sach Repository cua ban:\n\n"
+    if isinstance(result, list):
+        if not result:
+            msg += "Chua co repository nao."
+        else:
+            for repo_item in result:
+                msg += f"- `{repo_item}`\n"
+    else:
+        msg += f"```json\n{json.dumps(result, indent=2)}\n```"
+
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+async def repo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    client = await _require_client(update)
+    if not client:
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Cau lenh: `/repo https://github.com/user/repo.git main`",
+            parse_mode="Markdown",
+        )
+        return
+
+    repo_url = context.args[0]
+    branch = context.args[1] if len(context.args) > 1 else "main"
+    await update.message.reply_text(f"Dang clone repo `{repo_url}` (branch `{branch}`)...", parse_mode="Markdown")
+
+    result = await client.add_repo(url=repo_url, branch=branch)
+    if _is_unauthorized(result):
+        await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
+        return
+
+    
+        
+    else:
+        msg = f"✅ Phan hoi:\n```json\n{json.dumps(result, indent=2)}\n```"
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+async def branches(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    client = await _require_client(update)
+    if not client:
+        return
+    if not context.args:
+        await update.message.reply_text("Cau lenh: `/branches feature-login`", parse_mode="Markdown")
+        return
+
+    branch_name = context.args[0]
+    await update.message.reply_text(f"Dang chuyen sang branch `{branch_name}`...", parse_mode="Markdown")
+    result = await client.switch_branch(branch=branch_name)
+
+    if _is_unauthorized(result):
+        await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
+        return
+    
+        
+    else:
+        msg = f"✅ Phan hoi:\n```json\n{json.dumps(result, indent=2)}\n```"
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+async def cursor(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    client = await _require_client(update)
+    if not client:
+        return
+
+    await update.message.reply_text("Dang lay trang thai Git...")
+    result = await client.get_status()
+
+    if _is_unauthorized(result):
+        await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
+        return
+    
+        
+    else:
+        msg = f"📍 Trang thai hien tai:\n```json\n{json.dumps(result, indent=2)}\n```"
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+async def fix(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    client = await _require_client(update)
+    if not client:
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Cau lenh: `/fix <mo_ta_loi>`\nVi du: `/fix IndexError at line 10 in main.py`",
+            parse_mode="Markdown",
+        )
+        return
+
+    issue = " ".join(context.args)
+    await update.message.reply_text(f"Dang gui yeu cau fix...\nTrace: `{issue}`", parse_mode="Markdown")
+    result = await client.call_fix_api(trace_error=issue)
+
+    if _is_unauthorized(result):
+        await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
+        return
+    elif isinstance(result, dict) and "detail" in result and result.get("status_code") == 422:
+        msg = f"❌ Validation Error: {result['detail']}"
+    else:
+        msg = f"✅ Da nhan yeu cau Fix:\n```json\n{json.dumps(result, indent=2)}\n```"
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    client = await _require_client(update)
+    if not client:
+        return
+    if not context.args:
+        await update.message.reply_text("Cau lenh: `/cancel <request_id>`", parse_mode="Markdown")
+        return
+
+    request_id = context.args[0]
+    await update.message.reply_text(f"Dang huy task `{request_id}`...", parse_mode="Markdown")
+    result = await client.call_cancel_fix(request_id=request_id)
+
+    if _is_unauthorized(result):
+        await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
+        return
+    else:
+        msg = f"✅ Ket qua huy:\n```json\n{json.dumps(result, indent=2)}\n```"
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    client = await _require_client(update)
+    if not client:
+        return
+
+    await update.message.reply_text("Dang kiem tra status...")
+    result = await client.get_status()
+
+    if _is_unauthorized(result):
+        await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
+        return
+    else:
+        msg = f"📊 System Status:\n```json\n{json.dumps(result, indent=2)}\n```"
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+if __name__ == "__main__":
+    asyncio.run(db.init())
+
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("token", token_handler))
+    app.add_handler(CommandHandler("list", list_repo))
+    app.add_handler(CommandHandler("repo", repo))
+    app.add_handler(CommandHandler("branches", branches))
+    app.add_handler(CommandHandler("cursor", cursor))
+    app.add_handler(CommandHandler("fix", fix))
+    app.add_handler(CommandHandler("cancel", cancel))
+    app.add_handler(CommandHandler("status", status))
+
+    print("Bot dang chay...")
+    app.run_polling()
