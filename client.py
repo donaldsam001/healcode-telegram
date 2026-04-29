@@ -19,6 +19,7 @@ VALIDATION_TTL_SECONDS = 60
 
 ENDPOINTS = {
     "CREDENTIAL": "/api/credential",
+    "GIT": "/api/credential/token",
     "ME": "/api/credential/me",
     "REPO": "/api/git/repo",
     "BRANCH": "/api/git/branche",
@@ -139,31 +140,32 @@ class HealCodeClient:
                 return {"error": f"HTTP {http_code}", "status_code": http_code}
             return payload
 
-        # Contract backend uu tien: {status, code, message, data}
-        has_contract = any(key in payload for key in ("status", "code", "data", "message"))
-        if has_contract:
-            code = int(payload.get("code", http_code))
-            status_flag = payload.get("status")
-            success = bool(status_flag) and code < 400
-            message = payload.get("message")
-
-            if success:
-                return payload.get("data")
-
-            error_message = message or payload.get("error") or f"HTTP {code}"
-            return {"error": str(error_message), "status_code": code}
-
         if http_code >= 400:
             error_message = payload.get("message") or payload.get("detail") or payload.get("error") or f"HTTP {http_code}"
             return {"error": str(error_message), "status_code": http_code}
 
-        return payload
+        return payload.get("data", payload)
 
     async def credential_create(self, username: str, provider_id: str = "telegram"):
         return await self._make_request(
             "POST",
             ENDPOINTS["CREDENTIAL"],
             json_data={"provider_id": provider_id, "username": username},
+            skip_validation=True,
+        )
+    
+    async def save_git_token(self, token: str):
+        return await self._make_request(
+            "POST",
+            ENDPOINTS["GIT"],
+            json_data={"token": token},
+            skip_validation=True,
+        )
+    
+    async def get_git_token(self):
+        return await self._make_request(
+            "GET",
+            ENDPOINTS["GIT"],
             skip_validation=True,
         )
 

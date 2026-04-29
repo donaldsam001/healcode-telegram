@@ -109,6 +109,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Hello {username}!\n\n"
         "Healcode Bot Ready.\n\n"
         "Danh sach lenh ho tro:\n"
+        "`/token <token>` - Xem token hien tai hoac cap nhat\n"
         "`/list` - Xem danh sach Repositories\n"
         "`/repo <url> [branch]` - Them/Clone mot repo moi\n"
         "`/branches <branch_name>` - Doi nhanh lam viec\n"
@@ -125,6 +126,44 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(menu_text, parse_mode="Markdown")
 
+async def token_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    client = await _require_client(update)
+    if not client:
+        return
+
+    # Truong hop 1: Khong co tham so -> Xem token hien tai
+    if not context.args:
+        await update.message.reply_text("Dang lay thong tin token...")
+        result = await client.get_git_token()
+        
+        if _is_unauthorized(result):
+            await update.message.reply_text("Session het han. Vui long chay /start de tao session moi.")
+            return
+            
+        
+            await update.message.reply_text(f"Loi: {result.get('error')}")
+            return
+            
+        # Hien thi token, trong thuc te nen mask di mot phan de bao mat
+        msg = f"Thong tin token:\n```json\n{json.dumps(result, indent=2)}\n```"
+        await update.message.reply_text(msg, parse_mode="Markdown")
+        return
+
+    # Truong hop 2: Co tham so -> Cap nhat token moi
+    git_token = context.args[0]
+    await update.message.reply_text("Dang cap nhat token...")
+    
+    # Goi api cap nhat thong qua client
+    result = await client.save_git_token(git_token)
+
+    if _is_unauthorized(result):
+        await update.message.reply_text("Session het han. Vui long chay /start de tao session moi.")
+        return
+        
+    
+        await update.message.reply_text(f"Loi cap nhat: {result.get('error')}")
+    else:
+        await update.message.reply_text("Cap nhat Git token thanh cong.")
 
 async def list_repo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     client = await _require_client(update)
@@ -137,7 +176,7 @@ async def list_repo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if _is_unauthorized(result):
         await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
         return
-    if isinstance(result, dict) and "error" in result:
+    
         await update.message.reply_text(_format_error(result))
         return
 
@@ -174,8 +213,8 @@ async def repo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
         return
 
-    if isinstance(result, dict) and "error" in result:
-        msg = _format_error(result)
+    
+        
     else:
         msg = f"✅ Phan hoi:\n```json\n{json.dumps(result, indent=2)}\n```"
     await update.message.reply_text(msg, parse_mode="Markdown")
@@ -196,8 +235,8 @@ async def branches(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if _is_unauthorized(result):
         await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
         return
-    if isinstance(result, dict) and "error" in result:
-        msg = _format_error(result)
+    
+        
     else:
         msg = f"✅ Phan hoi:\n```json\n{json.dumps(result, indent=2)}\n```"
     await update.message.reply_text(msg, parse_mode="Markdown")
@@ -214,8 +253,8 @@ async def cursor(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if _is_unauthorized(result):
         await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
         return
-    if isinstance(result, dict) and "error" in result:
-        msg = _format_error(result)
+    
+        
     else:
         msg = f"📍 Trang thai hien tai:\n```json\n{json.dumps(result, indent=2)}\n```"
     await update.message.reply_text(msg, parse_mode="Markdown")
@@ -239,8 +278,6 @@ async def fix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if _is_unauthorized(result):
         await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
         return
-    if isinstance(result, dict) and "error" in result:
-        msg = _format_error(result)
     elif isinstance(result, dict) and "detail" in result and result.get("status_code") == 422:
         msg = f"❌ Validation Error: {result['detail']}"
     else:
@@ -263,8 +300,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if _is_unauthorized(result):
         await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
         return
-    if isinstance(result, dict) and "error" in result:
-        msg = _format_error(result)
     else:
         msg = f"✅ Ket qua huy:\n```json\n{json.dumps(result, indent=2)}\n```"
     await update.message.reply_text(msg, parse_mode="Markdown")
@@ -281,8 +316,6 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if _is_unauthorized(result):
         await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
         return
-    if isinstance(result, dict) and "error" in result:
-        msg = _format_error(result)
     else:
         msg = f"📊 System Status:\n```json\n{json.dumps(result, indent=2)}\n```"
     await update.message.reply_text(msg, parse_mode="Markdown")
@@ -293,6 +326,7 @@ if __name__ == "__main__":
 
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("token", token_handler))
     app.add_handler(CommandHandler("list", list_repo))
     app.add_handler(CommandHandler("repo", repo))
     app.add_handler(CommandHandler("branches", branches))
