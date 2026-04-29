@@ -200,7 +200,6 @@ class HealCodeClient:
         return await self._make_request(
             "POST",
             ENDPOINTS["FIX"],
-            params={"trace_error": trace_error},
             json_data={"trace_error": trace_error, "priority": 1},
             timeout=60,
         )
