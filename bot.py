@@ -151,8 +151,10 @@ async def setup_repo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
         )
         return
-
+    chat_id = update.effective_chat.id
     repo_url = context.args[0].removesuffix(".git")
+    healcode_token = await db.create_healcode_token(chat_id, repo_url)
+
     branch = context.args[1] if len(context.args) > 1 else "main"
     if not _validate_repo_url(repo_url):
         await update.message.reply_text(
@@ -177,20 +179,19 @@ async def setup_repo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Session het han. Vui long chay /start de tao session moi.")
         return
     
-    if not isinstance(result, dict) or not result.get("healcode_token"):
+    if not isinstance(result, dict) : #or not result.get("healcode_token")
         print("Code run to here: not instance")
         await update.message.reply_text(_format_error(result if isinstance(result, dict) else {}))
         return
 
     # This is the only intentional display of this secret; never log it.
-    token = result["healcode_token"]
     await update.message.reply_text(
         "✅ Repository registered successfully.\n\n"
         f"Repository:\n`{repo_url}`\n\n"
         "HealCode Token:\n"
-        f"`{token}`\n\n"
+        f"`{healcode_token}`\n\n"
         "Add this token to your Dev/Local server environment:\n"
-        f"`HEALCODE_TOKEN={token}`",
+        f"`HEALCODE_TOKEN={healcode_token}`",
         parse_mode="Markdown",
     )
 
@@ -207,11 +208,6 @@ async def token_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if _is_unauthorized(result):
             await update.message.reply_text("Session het han. Vui long chay /start de tao session moi.")
             return
-            
-        
-            await update.message.reply_text(f"Loi: {result.get('error')}")
-            return
-            
         # Hien thi token, trong thuc te nen mask di mot phan de bao mat
         msg = f"Thong tin token:\n```json\n{json.dumps(result, indent=2)}\n```"
         await update.message.reply_text(msg, parse_mode="Markdown")
@@ -227,9 +223,6 @@ async def token_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if _is_unauthorized(result):
         await update.message.reply_text("Session het han. Vui long chay /start de tao session moi.")
         return
-        
-    
-        await update.message.reply_text(f"Loi cap nhat: {result.get('error')}")
     else:
         await update.message.reply_text("Cap nhat Git token thanh cong.")
 
@@ -243,9 +236,6 @@ async def list_repo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if _is_unauthorized(result):
         await update.message.reply_text("❌ Session het han. Vui long chay `/start` de tao session moi.", parse_mode="Markdown")
-        return
-    
-        await update.message.reply_text(_format_error(result))
         return
 
     msg = "Danh sach Repository cua ban:\n\n"

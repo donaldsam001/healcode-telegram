@@ -2,6 +2,7 @@ import os
 from typing import Optional
 
 import aiosqlite
+from healcode_token import generate_healcode_token
 
 
 class Database:
@@ -28,6 +29,20 @@ class Database:
             )
             await self._migrate_legacy_username_schema(db)
             await self._ensure_identity_columns(db)
+
+            # ============================================================
+            # HealCode Token
+            # ============================================================
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS healcode_tokens (
+                    token TEXT PRIMARY KEY,
+                    chat_id INTEGER NOT NULL,
+                    repo_url TEXT NOT NULL
+                )
+                """
+            )
+
             await db.commit()
 
     async def _ensure_identity_columns(self, db) -> None:
@@ -122,3 +137,79 @@ class Database:
             ) as cursor:
                 row = await cursor.fetchone()
                 return row[0] if row else None
+
+    async def create_healcode_token(self, chat_id: int, repo_url: str,)-> str:
+        async with aiosqlite.connect(self.db_path) as db:
+            while True:
+                token = generate_healcode_token()
+                async with db.execute(
+                    '''SELECT 1 FROM healcode_tokens WHERE token=? ''',
+                    (token,),
+                )as cursor:
+                    exists = await cursor.fetchone()
+
+                if not exists:
+                    break
+
+            await db.execute(
+                '''INSERT INTO healcode_tokens (token, chat_id, repo_url) VALUES (?, ?, ?) ''',
+                (token, int(chat_id), repo_url),
+            )
+
+            await db.commit()
+
+        return token
+
+    async def get_healcode_mapping(self, token: str):
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                '''SELECT token, chat_id, repo_url FROM healcode_tokens WHERE token = ? ''',
+                (token,),
+            )as cursor:
+                row = await cursor.fetchone()
+
+        if row is None:
+            return None
+
+        return {
+            "token": row[0],
+            "chat_id": int(row[1]),
+            "repo_url": row[2],
+        }
+
+    async def delete_healcode_token(self, token: str) -> bool:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                DELETE FROM healcode_tokens WHERE token = ?
+                """,
+                (token,),
+            )
+
+            await db.commit()
+
+            return cursor.rowcount > 0
+
+    async def get_healcode_tokens_by_chat_id( self, chat_id: int,):
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                """
+                SELECT
+                    token,
+                    chat_id,
+                    repo_url
+                FROM healcode_tokens
+                WHERE chat_id = ?
+                """,
+                (int(chat_id),),
+            ) as cursor:
+                rows = await cursor.fetchall()
+
+        return [
+            {
+                "token": row[0],
+                "chat_id": int(row[1]),
+                "repo_url": row[2],
+            }
+            for row in rows
+        ]
