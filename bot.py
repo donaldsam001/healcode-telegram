@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from urllib.parse import urlparse
 from typing import Dict, Optional
 
 from dotenv import load_dotenv
@@ -91,11 +92,14 @@ async def _require_client(update: Update) -> Optional[HealCodeClient]:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if user is None:
+    chat = update.effective_chat
+    if user is None or chat is None or update.message is None:
         return
 
     user_id = user.id
     username = user.username or str(user_id)
+    # ``user_id`` identifies the account; ``chat_id`` is where notifications go.
+    await db.set_telegram_identity(user_id, chat.id, username)
     client = await _build_client(user_id)
 
     credential_result = await client.credential_create(username=username, provider_id="telegram")
@@ -110,6 +114,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Healcode Bot Ready.\n\n"
         "Danh sach lenh ho tro:\n"
         "`/token <token>` - Xem token hien tai hoac cap nhat\n"
+        "`/setup_repo <url> [branch]` - Dang ky repo cho webhook tu dong\n"
         "`/list` - Xem danh sach Repositories\n"
         "`/repo <url> [branch]` - Them/Clone mot repo moi\n"
         "`/branches <branch_name>` - Doi nhanh lam viec\n"
@@ -125,6 +130,69 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         menu_text += f"\nBackend tra ve loi: `{credential_result.get('error')}`"
 
     await update.message.reply_text(menu_text, parse_mode="Markdown")
+
+
+def _validate_repo_url(value: str) -> bool:
+    """Accept HTTPS GitHub/GitLab URLs without accepting embedded credentials."""
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or parsed.username or parsed.password:
+        return False
+    if parsed.netloc not in {"github.com", "gitlab.com"}:
+        return False
+    return len([part for part in parsed.path.split("/") if part]) >= 2
+
+
+async def setup_repo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user is None or update.effective_chat is None or update.message is None:
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Cau lenh: `/setup_repo https://github.com/org/repo [branch]`",
+            parse_mode="Markdown",
+        )
+        return
+
+    repo_url = context.args[0].removesuffix(".git")
+    branch = context.args[1] if len(context.args) > 1 else "main"
+    if not _validate_repo_url(repo_url):
+        await update.message.reply_text(
+            "❌ Repo URL phai la HTTPS URL cua GitHub hoac GitLab, vi du "
+            "`https://github.com/org/repo`.",
+            parse_mode="Markdown",
+        )
+        return
+
+    client = await _require_client(update)
+    if not client:
+        return
+    await update.message.reply_text("Dang dang ky repository cho Error Auto-Fix...")
+    result = await client.setup_repo(repo_url, branch, update.effective_chat.id)
+
+    print("DEBUG result:", result)
+    print("DEBUG type:", type(result))
+    print("DEBUG isinstance dict:", isinstance(result, dict))
+
+    if _is_unauthorized(result):
+        print("Code run to here: unauth")
+        await update.message.reply_text("❌ Session het han. Vui long chay /start de tao session moi.")
+        return
+    
+    if not isinstance(result, dict) or not result.get("healcode_token"):
+        print("Code run to here: not instance")
+        await update.message.reply_text(_format_error(result if isinstance(result, dict) else {}))
+        return
+
+    # This is the only intentional display of this secret; never log it.
+    token = result["healcode_token"]
+    await update.message.reply_text(
+        "✅ Repository registered successfully.\n\n"
+        f"Repository:\n`{repo_url}`\n\n"
+        "HealCode Token:\n"
+        f"`{token}`\n\n"
+        "Add this token to your Dev/Local server environment:\n"
+        f"`HEALCODE_TOKEN={token}`",
+        parse_mode="Markdown",
+    )
 
 async def token_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     client = await _require_client(update)
@@ -326,6 +394,7 @@ if __name__ == "__main__":
 
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("setup_repo", setup_repo))
     app.add_handler(CommandHandler("token", token_handler))
     app.add_handler(CommandHandler("list", list_repo))
     app.add_handler(CommandHandler("repo", repo))

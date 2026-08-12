@@ -26,6 +26,7 @@ ENDPOINTS = {
     "STATUS": "/api/git/status",
     "FIX": "/api/fix",
     "FIX_CANCEL": "/api/fix/cancel",
+    "SETUP_REPO": "/api/git/repo",
 }
 
 InvalidationCallback = Callable[[int], Optional[Awaitable[None]]]
@@ -207,3 +208,11 @@ class HealCodeClient:
     async def call_cancel_fix(self, request_id: str):
         endpoint = f"{ENDPOINTS['FIX_CANCEL']}/{request_id}"
         return await self._make_request("DELETE", endpoint)
+
+    async def setup_repo(self, repo_url: str, branch: str, chat_id: int):
+        """Register a webhook token mapping for the authenticated Telegram user."""
+        return await self._make_request(
+            "POST",
+            ENDPOINTS["SETUP_REPO"],
+            json_data={"url": repo_url, "branch": branch},
+        )
